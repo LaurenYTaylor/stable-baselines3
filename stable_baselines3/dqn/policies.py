@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Type
 import torch as th
 from gymnasium import spaces
 from torch import nn
+import random
 
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.torch_layers import (
@@ -212,6 +213,51 @@ class DQNPolicy(BasePolicy):
 
 
 MlpPolicy = DQNPolicy
+
+class JSRLDQNPolicy(DQNPolicy):
+    def __init__(
+        self,
+        observation_space: spaces.Space,
+        action_space: spaces.Discrete,
+        lr_schedule: Schedule,
+        guide_policy: DQNPolicy,
+        max_horizon: int,
+        net_arch: Optional[List[int]] = None,
+        activation_fn: Type[nn.Module] = nn.ReLU,
+        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        normalize_images: bool = True,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        horizon_schedule: Type[str] = "successive",
+        
+    ) -> None:
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch,
+            activation_fn,
+            features_extractor_class,
+            features_extractor_kwargs,
+            normalize_images=normalize_images,
+            optimizer_class=optimizer_class,
+            optimizer_kwargs=optimizer_kwargs,
+        )
+
+        horizon_list = list(range(max_horizon))
+        if horizon_schedule == "successive":
+            self.horizons = horizon_list
+        elif horizon_schedule == "random":
+            self.horizons = random.sample(horizon_list, max_horizon)
+        self.current_horizon = self.horizons[0]
+
+    def _predict(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
+        return self.q_net._predict(obs, deterministic=deterministic)
+
+    def forward(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
+        return self._predict(obs, deterministic=deterministic)
+
 
 
 class CnnPolicy(DQNPolicy):
