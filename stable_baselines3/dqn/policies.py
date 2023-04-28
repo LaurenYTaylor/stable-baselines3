@@ -1,9 +1,10 @@
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Union, Tuple
 
 import torch as th
 from gymnasium import spaces
 from torch import nn
 import random
+import numpy as np
 
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.torch_layers import (
@@ -214,13 +215,13 @@ class DQNPolicy(BasePolicy):
 
 MlpPolicy = DQNPolicy
 
-class JSRLDQNPolicy(DQNPolicy):
+class JsrlPolicy(MlpPolicy):
     def __init__(
         self,
         observation_space: spaces.Space,
         action_space: spaces.Discrete,
         lr_schedule: Schedule,
-        guide_policy: DQNPolicy,
+        guide_policy: super.__name__,
         max_horizon: int,
         net_arch: Optional[List[int]] = None,
         activation_fn: Type[nn.Module] = nn.ReLU,
@@ -245,15 +246,83 @@ class JSRLDQNPolicy(DQNPolicy):
             optimizer_kwargs=optimizer_kwargs,
         )
 
-        horizon_list = list(range(max_horizon))
-        if horizon_schedule == "successive":
-            self.horizons = horizon_list
-        elif horizon_schedule == "random":
-            self.horizons = random.sample(horizon_list, max_horizon)
-        self.current_horizon = self.horizons[0]
+        self.horizon_schedule = horizon_schedule
+        self.max_horizon = max_horizon-1
+        self.horizons = list(range(self.max_horizon, -1, -1))
+        self.episode = 0
+        self.episode_timestep = 0
+        self._next_horizon(-1)
+        self.guide_policy = guide_policy
 
-    def _predict(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
-        return self.q_net._predict(obs, deterministic=deterministic)
+    def predict(
+        self,
+        observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        num_timesteps: int,
+        state: Optional[Tuple[np.ndarray, ...]] = None,
+        episode_start: Optional[np.ndarray] = None,
+        deterministic: bool = False,
+    ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
+        """
+        Get the policy action from an observation (and optional hidden state).
+        Includes sugar-coating to handle different observations (e.g. normalizing images).
+
+        :param observation: the input observation
+        :param state: The last hidden states (can be None, used in recurrent policies)
+        :param episode_start: The last masks (can be None, used in recurrent policies)
+            this correspond to beginning of episodes,
+            where the hidden states of the RNN must be reset.
+        :param deterministic: Whether or not to return deterministic actions.
+        :return: the model's action and the next hidden state
+            (used in recurrent policies)
+        """
+        # Switch to eval mode (this affects batch norm / dropout)
+        self.set_training_mode(False)
+
+        observation, vectorized_env = self.obs_to_tensor(observation)
+
+        with th.no_grad():
+            actions = self._predict(observation, num_timesteps, deterministic=deterministic)
+        # Convert to numpy, and reshape to the original action shape
+        actions = actions.cpu().numpy().reshape((-1, *self.action_space.shape))
+
+        if isinstance(self.action_space, spaces.Box):
+            if self.squash_output:
+                # Rescale to proper domain when using squashing
+                actions = self.unscale_action(actions)
+            else:
+                # Actions could be on arbitrary scale, so clip the actions to avoid
+                # out of bound error (e.g. if sampling from a Gaussian distribution)
+                actions = np.clip(actions, self.action_space.low, self.action_space.high)
+
+        # Remove batch dimension if needed
+        if not vectorized_env:
+            actions = actions.squeeze(axis=0)
+
+        return actions, state
+
+    def _predict(self, obs: th.Tensor, timestep: int, deterministic: bool = True) -> th.Tensor:
+        if self.episode_timestep < self.current_horizon:
+            action = self.guide_policy.predict(obs, deterministic)
+            action = th.tensor(action[0], dtype=th.int)
+        else:
+            action = super()._predict(obs, deterministic=deterministic)
+        self._next_horizon(timestep)
+        return action
+
+    def _next_horizon(self, timestep):
+        if timestep%(self.max_horizon)==0 and timestep!=0:
+            self.episode += 1
+            self.episode_timestep = 0
+        else:
+            self.episode_timestep += 1
+        if self.horizon_schedule == "random":
+            self.current_horizon = random.choice(self.horizons)
+        elif self.horizon_schedule == "successive":
+            if self.episode < self.max_horizon:
+                self.current_horizon = self.horizons[self.episode]
+        else:
+            assert self.horizon_schedule in ["random", "successive"], "Horizon schedule must be 'random' or 'successive'."
+        return
 
     def forward(self, obs: th.Tensor, deterministic: bool = True) -> th.Tensor:
         return self._predict(obs, deterministic=deterministic)

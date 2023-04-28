@@ -16,7 +16,7 @@ from stable_baselines3.dqn.policies import JsrlPolicy, CnnPolicy, DQNPolicy, Mlp
 SelfDQN = TypeVar("SelfDQN", bound="DQN")
 
 
-class DQN(OffPolicyAlgorithm):
+class JSRLDQN(OffPolicyAlgorithm):
     """
     Deep Q-Network (DQN)
 
@@ -230,6 +230,7 @@ class DQN(OffPolicyAlgorithm):
     def predict(
         self,
         observation: Union[np.ndarray, Dict[str, np.ndarray]],
+        timestep: int,
         state: Optional[Tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
         deterministic: bool = False,
@@ -245,17 +246,21 @@ class DQN(OffPolicyAlgorithm):
             (used in recurrent policies)
         """
 
-        if not deterministic and np.random.rand() < self.exploration_rate:
-            if self.policy.is_vectorized_observation(observation):
-                if isinstance(observation, dict):
-                    n_batch = observation[list(observation.keys())[0]].shape[0]
+        if self.policy.episode_timestep > self.policy.current_horizon:
+            if not deterministic and np.random.rand() < self.exploration_rate:
+                if self.policy.is_vectorized_observation(observation):
+                    if isinstance(observation, dict):
+                        n_batch = observation[list(observation.keys())[0]].shape[0]
+                    else:
+                        n_batch = observation.shape[0]
+                    action = np.array([self.action_space.sample() for _ in range(n_batch)])
                 else:
-                    n_batch = observation.shape[0]
-                action = np.array([self.action_space.sample() for _ in range(n_batch)])
+                    action = np.array(self.action_space.sample())
+                self.policy._next_horizon(timestep)
             else:
-                action = np.array(self.action_space.sample())
+                action, state = self.policy.predict(observation, timestep, state, episode_start, deterministic)
         else:
-            action, state = self.policy.predict(observation, state, episode_start, deterministic)
+            action, state = self.policy.predict(observation, timestep, state, episode_start, deterministic)
         return action, state
 
     def learn(

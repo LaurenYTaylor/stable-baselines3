@@ -362,7 +362,6 @@ class BasePolicy(BaseModel, ABC):
         # Remove batch dimension if needed
         if not vectorized_env:
             actions = actions.squeeze(axis=0)
-
         return actions, state
 
     def scale_action(self, action: np.ndarray) -> np.ndarray:
