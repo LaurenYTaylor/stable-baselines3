@@ -245,7 +245,6 @@ class JSRLDQN(OffPolicyAlgorithm):
         :return: the model's action and the next state
             (used in recurrent policies)
         """
-
         if self.policy.episode_timestep > self.policy.current_horizon:
             if not deterministic and np.random.rand() < self.exploration_rate:
                 if self.policy.is_vectorized_observation(observation):
@@ -256,7 +255,7 @@ class JSRLDQN(OffPolicyAlgorithm):
                     action = np.array([self.action_space.sample() for _ in range(n_batch)])
                 else:
                     action = np.array(self.action_space.sample())
-                self.policy._next_horizon(timestep)
+                self.policy._update_ep_stats(timestep)
             else:
                 action, state = self.policy.predict(observation, timestep, state, episode_start, deterministic)
         else:

@@ -251,7 +251,8 @@ class JsrlPolicy(MlpPolicy):
         self.horizons = list(range(self.max_horizon, -1, -1))
         self.episode = 0
         self.episode_timestep = 0
-        self._next_horizon(-1)
+        self._update_ep_stats(-1)
+        self._next_horizon()
         self.guide_policy = guide_policy
 
     def predict(
@@ -306,20 +307,24 @@ class JsrlPolicy(MlpPolicy):
             action = th.tensor(action[0], dtype=th.int)
         else:
             action = super()._predict(obs, deterministic=deterministic)
-        self._next_horizon(timestep)
+        self._update_ep_stats(timestep)
         return action
 
-    def _next_horizon(self, timestep):
+    def _update_ep_stats(self, timestep):
         if timestep%(self.max_horizon)==0 and timestep!=0:
             self.episode += 1
             self.episode_timestep = 0
         else:
             self.episode_timestep += 1
+    
+    def _next_horizon(self):
         if self.horizon_schedule == "random":
             self.current_horizon = random.choice(self.horizons)
         elif self.horizon_schedule == "successive":
-            if self.episode < self.max_horizon:
-                self.current_horizon = self.horizons[self.episode]
+            if self.episode == 0:
+                self.current_horizon = self.horizons[0]
+            elif self.current_horizon > 0:
+                self.current_horizon = self.horizons[self.horizons.index(self.current_horizon)+1]
         else:
             assert self.horizon_schedule in ["random", "successive"], "Horizon schedule must be 'random' or 'successive'."
         return
